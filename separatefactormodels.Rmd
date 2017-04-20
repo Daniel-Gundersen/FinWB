@@ -1,0 +1,293 @@
+---
+title: "Money Health Separate factor models"
+author: "Daniel Gundersen"
+date: "April 9, 2017"
+output: html_document
+---
+
+#Loading and tidying data
+```{r reading and tidying data, warning=FALSE, message=FALSE}
+#load required packages
+library(tidyverse); library(modelr); library(readxl); library(psych); 
+library(reshape2); library(polycor); library(lavaan); library(foreign);
+library(ggmoasic)
+
+#set working directory
+setwd("C:/Users/dag68/Desktop/Projects/TuckerSeeley-MoneyHealth")
+
+##read data into a data frame
+mh.df <- read_excel("MHSurvey_BaselineDataset_6.23.16.xlsx")
+mh.df <- data.frame(mh.df)
+
+## select variables and tidy 
+fin.wb <- mh.df %>% select(Q18, Q19, Q22,Q20, Q21, Q44A:Q44B, Q23A:Q23G,
+                 Q46:Q48, Q24A:Q24E, Q27A:Q27F, Q28, Q29, Q30, Q32A:Q32C,
+                 Q31, Q35A:Q35D, Q42, Q17, Q43, Q25A:Q25D, Q26A:Q26C, 
+                 Q33A:Q33K, Q34A:Q34H,Q36A:Q36C)
+
+#recode 0 values to 1 (personal perference, unnecessary)
+f<-apply(fin.wb, 2, function(x) min(x, na.rm=T))
+fin.wb <- fin.wb %>% mutate_if(f<1, funs(. +1)) %>%
+                    mutate(Q32A=ifelse(Q32A>2, Q32A-1, Q32A),
+                           Q32B=ifelse(Q32B>2, Q32B-1, Q32B),
+                           Q32C=ifelse(Q32C>2, Q32C-1, Q32C),
+                           id=rownames(fin.wb)) 
+
+#create map of variables to domain
+Material=c("Q18", "Q19", "Q22", "Q20", "Q21", "Q44A", "Q44B",
+           "Q23A", "Q23B", "Q23C", "Q23D", "Q23E", "Q23F", "Q23G",
+           "Q46", "Q47", "Q48")
+Psychosocial=c("Q24A", "Q24B", "Q24C", "Q24D", "Q24E", 
+               "Q27A", "Q27B", "Q27C", "Q27D", "Q27E", 
+                "Q27F", "Q28", "Q29", "Q30", "Q32A", "Q32B",
+                "Q32C", "Q31", "Q35A", "Q35B", "Q35C", 
+                "Q35D", "Q42")
+Behavioral=c("Q17", "Q43", "Q25A", "Q25B", "Q25C", "Q25D", 
+            "Q26A", "Q26B", "Q26C", "Q33A", "Q33B", "Q33C",
+            "Q33D", "Q33E", "Q33F", "Q33G", "Q33H", "Q33I", 
+            "Q33J", "Q33K", "Q34A", "Q34B", "Q34C", "Q34D",
+            "Q34E", "Q34F", "Q34G", "Q34H", "Q36A",
+            "Q36B", "Q36C")
+
+#create molten data frame for assigning domain to variable and plotting
+fin.wb.long <- melt(fin.wb, id="id")
+
+fin.wb.long <- fin.wb.long %>%
+                mutate(fac_hyp=NA,
+                       fac_hyp=ifelse(variable %in% Material, 
+                                      "material", fac_hyp),
+                       fac_hyp=ifelse(variable %in% Psychosocial, 
+                                      "psychosocial", fac_hyp),
+                       fac_hyp=ifelse(variable %in% Behavioral, 
+                                      "behavioral", fac_hyp),
+                       fac_hyp=factor(fac_hyp))
+
+#recreate wide data frame with domain mapping
+fin.wb <- dcast(fin.wb.long, id ~ variable+fac_hyp)
+
+set.seed(356)
+fin.wb.part <- fin.wb %>% resample_partition(c(test = 0.5, train = 0.5))
+fin.wb.train <- as.data.frame(fin.wb.part$train)
+fin.wb.test <- as.data.frame(fin.wb.part$test)
+
+write_csv(fin.wb.train, "./finwbtrain.csv") #creates csv file of tidy data set
+write_csv(fin.wb.test, "./finwbtest.csv") #creates csv file of tidy data set
+```
+
+#Factor Models
+##Psycho-social
+```{r , warning=FALSE, message=FALSE}
+fin.wb.train1 <- fin.wb.train %>% select(-id, -Q22_material, 
+                                         -Q23E_material, -Q47_material,
+                                         -Q25D_behavioral, -Q26B_behavioral) %>%
+      mutate_at(vars(-Q46_material), as.ordered)
+      
+fin.wb.psychsoc <- fin.wb.train1 %>% select(contains("psychosocial"))
+cor.mat.psychsoc <- hetcor(fin.wb.psychsoc)
+
+##Estimate number of factors for inital extraction
+vss(cor.mat.psychsoc$correlations, rotate = "oblimin", fm="ml", n.obs=315)
+fa.parallel(cor.mat.psychsoc$correlations, n.obs=315, fm="ml", 
+            fa="fa", quant = .95)
+
+#INITIAL FACTOR MODEL
+psychsoc_4 <- fa(cor.mat.psychsoc$correlations, nfactors=4, n.obs=315, fm="ml", 
+                rotate="oblimin")
+
+print(psychsoc_4, sort=T, cut=.3)
+
+#remove Q27_D due to high cross loadings 
+fin.wb.psychsoc_red <- fin.wb.psychsoc %>%
+      select(-Q27D_psychosocial) 
+
+cor.mat.psychsoc_red <- hetcor(fin.wb.psychsoc_red)
+
+###Estimate number of factors for extraction
+vss(cor.mat.psychsoc_red$correlations, rotate = "oblimin", fm="ml", n.obs=315)
+fa.parallel(cor.mat.psychsoc_red$correlations, n.obs=315, fm="ml", 
+            fa="fa", quant = .95)
+
+#four factor model
+psychsoc_4.1 <- fa(cor.mat.psychsoc_red$correlations, nfactors=4, n.obs=315, fm="ml", 
+                rotate="oblimin")
+
+print(psychsoc_4.1, sort=T, cut=.3)
+
+#refit as three factor model due to only two var loading on 4th factor
+psychsoc_3 <- fa(cor.mat.psychsoc_red$correlations, nfactors=3, n.obs=315,
+                   fm="ml", rotate="oblimin")
+
+print(psychsoc_3, sort=T, cut=.3)
+
+#remove Q42 due to lack of contribution (no high factor loadings)
+fin.wb.psychsoc_red1 <- fin.wb.psychsoc_red %>%
+      select(-Q42_psychosocial) 
+
+cor.mat.psychsoc_red1 <- hetcor(fin.wb.psychsoc_red1)
+
+###Estimate number of factors for extraction
+vss(cor.mat.psychsoc_red1$correlations, rotate = "oblimin", fm="ml", n.obs=315)
+fa.parallel(cor.mat.psychsoc_red1$correlations, n.obs=315, fm="ml", 
+            fa="fa", quant = .95)
+
+##three factor model with reduced variable set
+psychsoc_3.2 <- fa(cor.mat.psychsoc_red1$correlations, nfactors=3, n.obs=315,
+                   fm="ml", rotate="oblimin")
+
+print(psychsoc_3.2, sort=T, cut=.4)
+
+```
+
+
+##Behavioral
+```{r, warning=FALSE, message=FALSE}
+fin.wb.behav <- fin.wb.train1 %>% select(contains("behavioral"))
+cor.mat.behav <- hetcor(fin.wb.behav)
+
+###Estimate number of factors for extraction
+vss(cor.mat.behav$correlations, rotate = "oblimin", fm="ml", n.obs=315)
+fa.parallel(cor.mat.behav$correlations, n.obs=315, fm="ml", 
+            fa="fa", quant = .95)
+
+#initial factor model
+behav_4 <- fa(cor.mat.behav$correlations, nfactors=4, n.obs=315,
+                   fm="ml", rotate="oblimin")
+
+print(behav_4, sort=F, cut=.3)
+
+#remove items with indiscriminate loadings
+fin.wb.behav_red <- fin.wb.behav %>% select(-c(Q43_behavioral, Q26C_behavioral,
+                                               Q33A_behavioral, Q33D_behavioral,
+                                               Q33E_behavioral, Q33F_behavioral,
+                                               Q33G_behavioral, Q33J_behavioral,
+                                               Q36C_behavioral))
+
+cor.mat.behav_red <- hetcor(fin.wb.behav_red)
+
+###Estimate number of factors for extraction
+vss(cor.mat.behav_red$correlations, rotate = "oblimin", fm="ml", n.obs=315)
+fa.parallel(cor.mat.behav_red$correlations, n.obs=315, fm="ml", 
+            fa="fa", quant = .95)
+
+
+#factor model with reduced variable set
+behav_3 <- fa(cor.mat.behav_red$correlations, nfactors=3, n.obs=315,
+                   fm="ml", rotate="oblimin")
+
+print(behav_3, sort=F, cut=.3)
+
+#remove Q17 for little contribution
+fin.wb.behav_red1 <- fin.wb.behav_red %>% select(-Q17_behavioral)
+
+cor.mat.behav_red1 <- hetcor(fin.wb.behav_red1)
+
+#estimate number of factors
+vss(cor.mat.behav_red1$correlations, rotate = "oblimin", fm="ml", n.obs=315)
+fa.parallel(cor.mat.behav_red1$correlations, n.obs=315, fm="ml", 
+            fa="fa", quant = .95)
+
+#three factor model reduced variable set
+behav_3.1 <- fa(cor.mat.behav_red1$correlations, nfactors=3, n.obs=315,
+                   fm="ml", rotate="oblimin")
+
+print(behav_3.1, sort=F, cut=.3)
+
+#remove Q25A and Q25C for indiscrimate loadings
+fin.wb.behav_red2 <- fin.wb.behav_red1 %>% select(-c(Q25A_behavioral,
+                                                     Q25C_behavioral))
+
+cor.mat.behav_red2 <- hetcor(fin.wb.behav_red2)
+
+#estimate number of factors
+vss(cor.mat.behav_red2$correlations, rotate = "oblimin", fm="ml", n.obs=315)
+fa.parallel(cor.mat.behav_red2$correlations, n.obs=315, fm="ml", 
+            fa="fa", quant = .95)
+
+#three factor model reduced variable set
+behav_3.2 <- fa(cor.mat.behav_red2$correlations, nfactors=3, n.obs=315,
+                   fm="ml", rotate="oblimin")
+
+print(behav_3.2, sort=F, cut=.4)
+
+#fit two level model due to one variable factor
+behav_2 <- fa(cor.mat.behav_red2$correlations, nfactors=2, n.obs=315,
+                   fm="ml", rotate="oblimin")
+
+print(behav_2, sort=T, cut=.4)
+
+```
+
+##Material
+```{r, warning=FALSE, message=FALSE}
+fin.wb.mat <- fin.wb.train1 %>% select(contains("material")) 
+cor.mat.mat <- hetcor(fin.wb.mat)
+
+#remove Q23A and Q48 due to nearly perfect correlation with Q23C.
+fin.wb.mat <- fin.wb.mat %>% select(-c(Q23A_material, Q48_material)) 
+cor.mat.mat <- hetcor(fin.wb.mat)
+
+##initial estimation of number of factors
+vss(cor.mat.mat$correlations, fm="ml", rotate="oblimin", n.obs=315)
+fa.parallel(cor.mat.mat$correlations, fm="ml", quant=.95, n.obs=315,
+            fa="fa")
+
+##initial fit
+material_3 <- fa(cor.mat.mat$correlations, nfactors=3, fm="ml", n.obs=315,
+                 rotate="oblimin")
+
+print(material_3, cut=.3, sort=F)
+
+##remove Q21, Q44B, Q23G for indiscriminate loading
+fin.wb.mat_red <- fin.wb.mat %>% select(-c(Q21_material, Q44B_material))
+
+cor.mat.mat_red <- hetcor(fin.wb.mat_red)
+
+##estimation of number of factors for reduced variable set
+vss(cor.mat.mat_red$correlations, n.obs=315, fm="ml", rotate="oblimin")
+fa.parallel(cor.mat.mat_red$correlations, n.obs=315, fm="ml", quant=.95,
+            fa="fa")
+
+#3 factor model with reduced variable set
+material_3.1 <- fa(cor.mat.mat_red$correlations, nfactors=3, n.obs=315,
+                 fm="ml", rotate="oblimin")
+
+print(material_3.1, sort=F, cut=.3)
+
+#eliminate Q23D_material and Q46_material for indiscriminate loadings
+fin.wb.mat_red2 <- fin.wb.mat_red %>% select(-c(Q23D_material, Q46_material))
+
+cor.mat.mat_red2 <- hetcor(fin.wb.mat_red2)
+
+##estimation of number of factors for reduced variable set
+vss(cor.mat.mat_red2$correlations, n.obs=315, fm="ml", rotate="oblimin")
+fa.parallel(cor.mat.mat_red2$correlations, n.obs=315, fm="ml", fa="fa",
+            quant=.95)
+
+##two factor model with reduced variable set
+material_3.2 <- fa(cor.mat.mat_red2$correlations, n.obs=315, nfactors=3, fm="ml",
+                 rotate="oblimin")
+
+print(material_3.2, sort=F, cut=.3)
+
+#remove Q44A_material due low loadings
+fin.wb.mat_red3 <- fin.wb.mat_red2 %>% select(-c(Q44A_material))
+
+cor.mat.mat_red3 <- hetcor(fin.wb.mat_red3)
+
+vss(cor.mat.mat_red3$correlations, n.obs=315, fm="ml", rotate="oblimin")
+fa.parallel(cor.mat.mat_red3$correlations, n.obs=315, fm="ml", fa="fa",
+            quant=.95)
+
+#2 factor model with reduced set
+material_3.3 <- fa(cor.mat.mat_red3$correlations, n.obs=315, nfactors=3, fm="ml",
+                 rotate="oblimin")
+
+print(material_3.3, sort=F, cut=.3)
+material_2 <- fa(cor.mat.mat_red3$correlations, n.obs=315, nfactors=2, fm="ml",
+                 rotate="oblimin")
+
+a1 <- fa(fin.wb.mat_red3, nfactors=2, cor="poly", fm="ml", rotate="oblimin")
+
+print(material_2, sort=F, cut=.3)
+
+```
